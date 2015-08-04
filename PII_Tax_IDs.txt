@@ -1,0 +1,34 @@
+CCR-ID: 000247681888 (12-digit) 
+SourcePIN: MDEyMzQ1Njc4OWFiY2RlZg== (24 bytes base64) 
+ssPIN(BW): MswQO/UhO5RG+nR+klaOTsVY+CU= (28 bytes base64)  
+BW (Bauen + Wohnen) is the public sector related to "construction and habitation". 
+There are approximately 30 sectors like health, taxes, statistics, and security. 
+ 
+individual taxpayer identification number, itin, i.t.i.n. 
+ 
+123 45 6789  
+912-74-1234 
+912-74-1234 
+ 
+912-74-1234 
+912-74-1234 
+912-74-1234 
+912-74-1234 
+ 
+913-75-1834 
+
+{code:java} itin 020532424 02-0532420 {code} 
+
+"The message is clear: When looking at their career goals, today's millennials are just as interested in how a business develops its people and how it contributes to society as they are in its products and profits," Barry Salzberg, CEO of Deloitte Global, said in a statement. "These findings should be viewed as a wake-up call to the business community."
+
+Overall, businesses in the technology, media and telecommunications (TMT) sector are the most attractive to millennials. Part of the attraction is that younger workers feel this sector provides the most valuable skills and develops the strongest leaders. Specifically, 33 percent of those surveyed believe leadership is the strongest in the TMT sector, which is three times higher than the second-ranked industry, food and beverages, and four times that for the third-ranked sector, banking and financial services.
+
+Millennials view leadership much differently than previous generations. The study discovered that today's millennials place less value on visible, well-networked and technically skilled leaders and instead, define true leaders as strategic thinkers, inspirational, personable and visionary.
+
+Salzberg said millennials want more from their employer than might have been the case 50, 20, or even 10 years ago.
+
+"They are sending a very strong signal to the world's leaders that when doing business, they should do so with purpose," he said. "The pursuit of this different and better way of operating in the 21st century begins by redefining leadership."
+
+The study was based on surveys of 7,800 millennials representing 29 countries around the globe. All of those surveyed were employed full-time.
+ 
+ 
