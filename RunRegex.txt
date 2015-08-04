@@ -1,0 +1,364 @@
+package util;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBList;
+import java.util.Iterator;
+public class RunRegex {
+public static boolean ignoreKeywords = false;
+public static int KEYWORD_IGNORE_THRESHOLD = 25 * 1024; // file size in bytes
+final static int PROXIMITY_BUFFER = 50;
+/*
+* regexData contains: { regex -> BasicDBList of regexes
+* regex_type -> pci or custom
+* threshold -> number of detections needed
+* regex_name -> name of regex (regex_ccn, regex_ssn etc. for custom regexes, we will use the policy_id)
+* keyword_list -> list of keywords that are to be detected in proximity (at this time only applicable to non-custom regexes) }
+*/
+public static BasicDBObject runRegexListOnFile(String fileName, FileContentResult fcm, BasicDBObject regexData) {
+try {
+BasicDBObject result = new BasicDBObject();
+if (fileName == null || fileName.trim().length() == 0) {
+UtilLogger.getInstance().error("Invalid fileName");
+return null;
+}
+if (fcm == null) {
+UtilLogger.getInstance().error("Null FileContentResult");
+return null;
+}
+if (regexData == null) {
+// UtilLogger.getInstance().error("Null RegexData"); this is expected.
+return null;
+}
+if (!isRegexDataValid(regexData)) {
+UtilLogger.getInstance().error("Regex Data not properly passed");
+return null;
+}
+BasicDBList detectionList = new BasicDBList();
+BasicDBObject small_data = new BasicDBObject("regex_name", regexData.get("regex_name"));
+small_data.put("fieldname", regexData.get("fieldname"));
+small_data.put("keywords", regexData.get("keywords"));
+small_data.put("mask_level", regexData.get("mask_level"));
+result.put("has_valid", false);
+result.put("filename", fileName);
+result.put("detection_list", detectionList);
+result.put("total_detections", 0);
+BasicDBList regexList = (BasicDBList) regexData.get("regex_list");
+Iterator it = regexList.iterator();
+boolean isValid, isAnd;
+isValid = isAnd = ("custom".equalsIgnoreCase(regexData.getString("regex_type")) && "and".equalsIgnoreCase(regexData.getString("regex_operator")));
+int totalDetections = 0;
+int threshold = 1;
+if (regexData.get("threshold") != null) {
+threshold = Integer.parseInt((String) regexData.get("threshold"));
+}
+while (it.hasNext()) {
+String currRegex = (String) it.next();
+if (currRegex != null && currRegex.length() > 0 && isRegexValid(currRegex)) {
+small_data.put("regex", currRegex);
+int currentDetections = newRunRegexOnFile(fileName, fcm, small_data, result);
+if (currentDetections == 0) {
+if (isAnd) {
+isValid = false;
+}
+} else {
+totalDetections += currentDetections;
+if ((boolean) result.get("has_valid") && !isAnd) {
+isValid = true;
+}
+}
+} else {
+UtilLogger.getInstance().error("Regex is invalid.");
+}
+}
+if (threshold <= totalDetections) {
+result.put("success", isValid);
+} else {
+result.put("success", false);
+}
+result.put("total_detections", totalDetections);
+return result;
+} catch (Exception exp) {
+UtilLogger.getInstance().error("Exception exp " + exp);
+exp.printStackTrace();
+return null;
+}
+}
+public static int newRunRegexOnFile(String file_name, FileContentResult fcm, BasicDBObject regex_data, BasicDBObject result) {
+BasicDBList regex_detected = (BasicDBList) result.get("detection_list");
+boolean one_full_valid = (boolean) result.get("has_valid");
+String regex = regex_data.getString("regex");
+String regex_name = regex_data.getString("regex_name");
+String field_name = regex_data.getString("fieldname");
+BasicDBList keywords = (BasicDBList) regex_data.get("keywords");
+int regex_count = 0;
+try {
+Pattern pattern = Pattern.compile(regex);
+TimeoutCharSequence tcs = new TimeoutCharSequence(ExtractText.fromFile(file_name));
+Matcher matcher = pattern.matcher(tcs);
+if (regex_name == null) {
+return (matcher.find()) ? 1 : 0;
+}
+while (matcher.find()) {
+BasicDBObject detect_obj = prepDetObj(matcher, tcs, regex_name);
+String validation_result = getSeqValidation(matcher, keywords, tcs, regex_name, detect_obj);
+if (validation_result != null && (validation_result.equals("keyword_failed") || validation_result.equals("pass")) && !fcm.regexIgnoreContains(matcher.group()) && fcm.addToRegexSet(regex_name, matcher.group())) {
+//fcm only stores first 1000 uniques. then the results get fuzzy. No false negs but possibly false posits,i.e, count may not be only uniques after 1000
+if ("regex_taxid".equals(regex_name) && !"pass".equals(validation_result)) {//exception for tax ids. no adding if string not detected.
+continue;
+}
+regex_count++;
+if ((!one_full_valid) && "pass".equals(validation_result)) {
+one_full_valid = true;
+result.put("has_valid", true);
+if (regex_detected.size() > 0) {
+regex_detected.remove(0);
+}
+}
+if (regex_detected.size() < 10) {
+detect_obj.put("extra", field_name);
+maskDetectObj(detect_obj, regex_data);
+regex_detected.add(detect_obj);
+}
+}
+}
+} catch (Exception e) {
+UtilLogger.getInstance().error("exception " + e);
+}
+result.put("has_valid", one_full_valid);
+return regex_count;
+}
+// made public for testing
+public static boolean isRegexDataValid(BasicDBObject regex_data) {
+if (regex_data.getString("regex_type") == null || !(regex_data.getString("regex_type").equalsIgnoreCase("github") || regex_data.getString("regex_type").equalsIgnoreCase("custom") || regex_data.getString("regex_type").equalsIgnoreCase("pci"))) {
+UtilLogger.getInstance().error("regex_type is not valid in the regex_data. Given type is " + regex_data.getString("regex_type"));
+return false;
+}
+BasicDBList regex_list = (BasicDBList) regex_data.get("regex_list");
+if (regex_list == null || regex_list.size() == 0) {
+UtilLogger.getInstance().error("no regexes found");
+return false;
+}
+if (regex_data.get("keywords") == null) {
+UtilLogger.getInstance().error("keywords is null.");
+return false;
+}
+if (regex_data.getString("regex_type").trim().equalsIgnoreCase("pci")) {
+return true;
+} else if (regex_data.getString("regex_operator") == null || (!regex_data.getString("regex_operator").equalsIgnoreCase("and") && !regex_data.getString("regex_operator").equalsIgnoreCase("or"))) {
+UtilLogger.getInstance().error("regex_operator is not valid " + regex_data.getString("regex_operator"));
+return false;
+}
+return true;
+}
+static BasicDBObject prepDetObj(Matcher matcher, TimeoutCharSequence seq_char, String regex_name) {
+try {
+BasicDBObject result = new BasicDBObject();
+int fromBfore = (matcher.start() >= PROXIMITY_BUFFER) ? (matcher.start() - PROXIMITY_BUFFER) : 0;
+int toBfore = matcher.start();
+int fromAfter = matcher.end();
+int toAfter = (matcher.end() <= seq_char.length() - PROXIMITY_BUFFER) ? (matcher.end() + PROXIMITY_BUFFER) : seq_char.length();
+String bforeOrig = seq_char.subSequence(fromBfore, toBfore).toString();
+if (bforeOrig.length() > 0) {
+char tmpch = bforeOrig.charAt(bforeOrig.length() - 1);
+if (!"regex_magstripe".equals(regex_name) && !"regex_custom".equals(regex_name) && !(Character.isWhitespace(tmpch) || Character.isSpaceChar(tmpch) || tmpch == '\n' || tmpch == ',' || tmpch == '|' || tmpch == ':')) {
+return null;
+}
+}
+String afterOrig = seq_char.subSequence(fromAfter, toAfter).toString();
+if (afterOrig.length() > 0) {
+char tmpch = afterOrig.charAt(0);
+if (!"regex_magstripe".equals(regex_name) && !"regex_custom".equals(regex_name) && !(Character.isWhitespace(tmpch) || Character.isSpaceChar(tmpch) || tmpch == '\n' || tmpch == ',' || tmpch == '|')) {
+return null;
+}
+}
+String detected = matcher.group();
+result.put("left", (fromBfore < toBfore) ? bforeOrig : null);
+result.put("right", (fromAfter < toAfter) ? afterOrig : null);
+result.put("detection", detected);
+return result;
+} catch (Exception exp) {
+UtilLogger.getInstance().error("Error prepping det obj." + exp);
+}
+return null;
+}
+static String getSeqValidation(Matcher matcher, BasicDBList validatorList, TimeoutCharSequence seqChar, String regexName, BasicDBObject result) {
+try {
+if (result == null) {
+return null;
+}
+String bfore = (String) result.get("left");
+String after = (String) result.get("right");
+if (bfore != null) {
+bfore = bfore.toLowerCase().replaceAll("[^a-z#0-9_+&-]", " "); //Spaces Necessary for Exact String matching (Validation).
+} else {
+bfore = "";
+}
+if (after != null) {
+after = after.toLowerCase().replaceAll("[^a-z#0-9_+&-]", " "); //Spaces Necessary for Exact String matching (Validation).
+} else {
+after = "";
+}
+String detected = (String) result.get("detection");
+switch (regexName) {
+case "regex_ccn":
+if (!isLuhnNum(matcher.group())) {
+return "algo_failed";
+}
+break;
+case "regex_ssn":
+String alldigs = detected.replaceAll("[^\\d]", "");
+if (alldigs.startsWith("9") || alldigs.startsWith("000") || alldigs.startsWith("666") || alldigs.endsWith("0000") || (alldigs.substring(3, 5)).equals("00")) {
+return "algo_failed";
+}
+if (alldigs.matches("(111111111|222222222|333333333|444444444|555555555|777777777|888888888|123456789|219099999|078051120)")) {//startswith 9, starts with 666, ends with 0000. so all 6 or 9 or 0 is excluded.
+return "algo_failed";
+}
+break;
+case "regex_magstripe":
+//leave alone - do not apply ignoreKeywords flag
+String resultant = matcher.group();
+if (resultant.startsWith(";")) { //track 2
+if (!isLuhnNum(resultant.substring(1, resultant.indexOf("=")))) {
+return "algo_failed";
+}
+} else if (resultant.startsWith("%B")) { //track 1
+if (!isLuhnNum(resultant.substring(2, resultant.indexOf("^")))) {
+return "algo_failed";
+}
+} else {
+return "algo_failed";
+}
+break;
+case "regex_taxid":
+String digits = detected.replaceAll("[^\\d]", "");
+if (digits.startsWith("9") || digits.startsWith("000") || digits.startsWith("666") || digits.endsWith("0000") || (digits.substring(3, 5)).equals("00")) {
+return "algo_failed";
+}
+if (digits.matches("(111111111|222222222|333333333|444444444|555555555|777777777|888888888|123456789|219099999|078051120)")) {//startswith 9, starts with 666, ends with 0000. so all 6 or 9 or 0 is excluded.
+return "algo_failed";
+}
+break;
+case "regex_ban":
+if (!IbanValidator.validateIban(matcher.group())) {
+return "algo_failed";
+}
+break;
+}
+if (validatorList.size() == 0 || ignoreKeywords) {
+return "pass";
+}
+Iterator it = validatorList.iterator();
+while (it.hasNext()) {
+String validar = (String) it.next();
+validar = validar.trim(); //Remove unnecessary spaces if present
+validar = " " + validar + " "; // validation keywords cant be part of another word
+if (validar.length() > 2 && (bfore.contains(validar) || after.contains(validar))) { //make sure validar is more than just 2 spaces and then check for contains
+return "pass";
+}
+}
+return "keyword_failed";
+} catch (Exception e) {
+UtilLogger.getInstance().error("Exception " + e + " in chk if regex match is valid.");
+}
+return null;
+}
+private static void maskDetectObj(BasicDBObject detect_obj, BasicDBObject regex_data) {
+String regex_name = regex_data.getString("regex_name");
+if (regex_data.get("mask_level") != null && regex_data.getInt("mask_level") > 0) {
+UtilLogger.getInstance().info(" mask level active. level is: " + regex_data.get("mask_level"));
+int mask_level = regex_data.getInt("mask_level");
+String detection = detect_obj.getString("detection");
+String part1, part2;
+if (mask_level == 1) {
+switch (regex_name) {
+case "regex_ccn":
+case "regex_ssn":
+case "regex_taxid":
+part1 = detection.substring(0,detection.length()-4).replaceAll("[A-Za-z0-9]", "*");
+part2 = detection.substring(detection.length()-4);
+break;
+case "regex_ban":
+part1 = detection.substring(0,4);
+part2 = detection.substring(4).replaceAll("[A-Za-z0-9]", "*");
+break;
+case "regex_magstripe":
+part1 = detection.substring(0).replaceAll("[0-9]", "*");
+part2 = "";
+break;
+default:
+return;
+}
+detection = part1+part2;
+} else {
+detection = detection.replaceAll("[A-Za-z0-9]", "*");
+}
+detect_obj.put("detection", detection);
+}
+}
+private static class TimeoutCharSequence implements CharSequence {
+CharSequence inner;
+long lastTime;
+long timeOutPeriod;
+public TimeoutCharSequence(CharSequence inner) {
+super();
+this.inner = inner;
+this.timeOutPeriod = 5;
+lastTime = 0;
+}
+@Override
+public char charAt(int index) {
+if (lastTime != 0 && (System.currentTimeMillis() / 1000L) - lastTime > timeOutPeriod) {
+UtilLogger.getInstance().error("very possible that regex taking too long. Exiting " + System.currentTimeMillis() / 1000L);
+throw new RuntimeException("Regex taking too long");
+}
+lastTime = System.currentTimeMillis() / 1000L;
+return inner.charAt(index);
+}
+@Override
+public int length() {
+return inner.length();
+}
+@Override
+public CharSequence subSequence(int start, int end) {
+return new TimeoutCharSequence(inner.subSequence(start, end));
+}
+@Override
+public String toString() {
+return inner.toString();
+}
+}
+public static boolean isRegexValid(String regex) {
+try {
+Pattern.compile(regex);
+} catch (Exception e) {
+return false;
+}
+return true;
+}
+public static boolean isLuhnNum(String number) {
+try {
+int[] DELTAS = new int[]{0, 1, 2, 3, 4, -4, -3, -2, -1, 0};
+int checksum = 0;
+boolean isSecondNum = false;
+char[] chars = number.toCharArray();
+int j;
+for (int i = chars.length - 1; i > -1; i--) {
+j = chars[i] - '0';
+if (j < 0 || j > 9) {
+continue;
+}
+checksum += j;
+if (isSecondNum) {
+checksum += DELTAS[j];
+}
+isSecondNum = !isSecondNum;
+}
+return ((checksum % 10) == 0);
+} catch (Exception e) {
+UtilLogger.getInstance().error("error calcualting Luhn Number");
+e.printStackTrace();
+return false;
+}
+}
+}
